@@ -1,10 +1,11 @@
 // Package registry 是邀请码台账：玩家与码双向唯一。
-// 缺陷：同一个玩家重复生成会拿到新码（不幂等）、查询码时全扫台账。
 package registry
 
 import (
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 
 	"example.com/friendcode/codec"
 )
@@ -24,23 +25,27 @@ func New() *Registry {
 	return &Registry{byPlayer: map[string]string{}, byCode: map[string]string{}}
 }
 
-// Assign 给玩家分配邀请码。缺陷：不查幂等，每次都重新编一个新码并覆盖旧记录。
+// Assign 给玩家分配邀请码：同一玩家幂等返回同一个码；码被别人占了就换盐重编。
 func (r *Registry) Assign(player string) string {
+	if code, ok := r.byPlayer[player]; ok {
+		return code
+	}
 	code := codec.Encode(player)
+	for salt := 1; ; salt++ {
+		if _, taken := r.byCode[code]; !taken {
+			break
+		}
+		code = codec.Encode(player + "\x00" + strconv.Itoa(salt))
+	}
 	r.byPlayer[player] = code
 	r.byCode[code] = player
 	return code
 }
 
-// Owner 返回码的归属玩家。缺陷：全扫台账。
+// Owner 按码反查归属玩家，O(1) 哈希查询，不全扫台账。
 func (r *Registry) Owner(code string) string {
-	r.scanned += len(r.byPlayer)
-	for player, value := range r.byPlayer {
-		if value == code {
-			return player
-		}
-	}
-	return ""
+	r.scanned++
+	return r.byCode[strings.ToUpper(code)]
 }
 
 // Players 返回已分配的玩家（升序）。
@@ -53,5 +58,5 @@ func (r *Registry) Players() []string {
 	return out
 }
 
-// Scanned 是累计扫描的台账条目数（规模观测）。
+// Scanned 是累计查询探测的台账条目数（规模观测）。
 func (r *Registry) Scanned() int { return r.scanned }
